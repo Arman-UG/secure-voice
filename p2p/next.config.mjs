@@ -14,8 +14,9 @@ const nextConfig = {
   poweredByHeader: false,
   compress: true,
   productionBrowserSourceMaps: false,
-  // Ye line error fix karegi:
   turbopack: {},
+  output: 'export',        // ← YE ADD KAR
+  images: { unoptimized: true },
 };
 
 export default withPWA(nextConfig);
