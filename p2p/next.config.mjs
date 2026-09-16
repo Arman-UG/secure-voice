@@ -14,8 +14,7 @@ const nextConfig = {
   poweredByHeader: false,
   compress: true,
   productionBrowserSourceMaps: false,
-  turbopack: {},
-  output: 'export',        // ← YE ADD KAR
+  turbopack: {}, 
   images: { unoptimized: true },
 };
 
