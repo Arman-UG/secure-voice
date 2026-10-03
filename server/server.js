@@ -3,10 +3,19 @@
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
+const webpush = require('web-push');
+const dotenv = require('dotenv');
+dotenv.config();
 const { Server } = require('socket.io');
 
 const PORT = Number(process.env.PORT) || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || '*';
+
+webpush.setVapidDetails(
+  process.env.VAPID_SUBJECT,
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 const app = express();
 app.use(cors({ origin: CLIENT_ORIGIN, credentials: false }));
@@ -18,6 +27,8 @@ const server = http.createServer(app);
 const numberToSocket = new Map(); // number -> socket.id
 const socketToNumber = new Map(); // socket.id -> number
 const activeCalls = new Map();    // socket.id -> peer socket.id
+const pushSubscriptions = new Map();  // number -> push subscription
+const pendingCalls = new Map(); // target number -> pending incoming call
 
 const isValidNumber = (v) => typeof v === 'string' && /^\d{10}$/.test(v);
 
@@ -54,43 +65,111 @@ app.get('/health', (_req, res) => {
   });
 });
 
+app.post('/push/subscribe', (req, res) => {
+  const { number, subscription } = req.body || {};
+
+  if (!isValidNumber(number)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Number must be exactly 10 digits',
+    });
+  }
+
+  if (!subscription || typeof subscription !== 'object') {
+    return res.status(400).json({
+      ok: false,
+      error: 'Invalid push subscription',
+    });
+  }
+
+  pushSubscriptions.set(number, subscription);
+
+  console.log(`[push] subscription saved for ${number}`);
+
+  return res.json({
+    ok: true,
+  });
+});
+
+app.post('/push/unsubscribe', (req, res) => {
+  const { number } = req.body || {};
+
+  if (!isValidNumber(number)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Number must be exactly 10 digits',
+    });
+  }
+
+  pushSubscriptions.delete(number);
+
+  console.log(`[push] subscription removed for ${number}`);
+
+  return res.json({ ok: true });
+});
+
 io.on('connection', (socket) => {
   console.log(`[socket] connected ${socket.id}`);
 
   /* -------- AUTO-REGISTER: server khud number dega -------- */
-  socket.on('register', (payload = {}, ack) => {
-    const respond = typeof ack === 'function' ? ack : () => {};
+socket.on('register', (payload = {}, ack) => {
+  const respond = typeof ack === 'function' ? ack : () => {};
 
-    let number = payload && payload.number;
+  const number = payload && payload.number;
 
-    // Agar user ne number nahi diya → server khud generate kare
-    if (!number) {
-      number = generateUniqueNumber();
+  // User must provide their own 10-digit number.
+  // No random number generation anymore.
+  if (!isValidNumber(number)) {
+    return respond({
+      ok: false,
+      error: 'Number must be exactly 10 digits',
+    });
+  }
+
+  const existing = numberToSocket.get(number);
+
+  if (existing && existing !== socket.id) {
+    // Check whether the old socket is actually still connected.
+    const existingSocket = io.sockets.sockets.get(existing);
+
+    if (existingSocket) {
+      // Someone is genuinely using this number right now.
+      return respond({
+        ok: false,
+        error: 'Number already in use',
+      });
     }
 
-    if (!isValidNumber(number)) {
-      return respond({ ok: false, error: 'Invalid number format' });
-    }
-    const existing = numberToSocket.get(number);
-    if (existing && existing !== socket.id) {
-      return respond({ ok: false, error: 'Number already in use' });
-    }
+    // Old socket is gone → remove stale mapping.
+    numberToSocket.delete(number);
+    socketToNumber.delete(existing);
+  }
 
-    // Purana number chhod do
-    const previous = socketToNumber.get(socket.id);
-    if (previous && previous !== number && numberToSocket.get(previous) === socket.id) {
-      numberToSocket.delete(previous);
-    }
+  // Remove any previous number belonging to this socket.
+  const previous = socketToNumber.get(socket.id);
 
-    numberToSocket.set(number, socket.id);
-    socketToNumber.set(socket.id, number);
+  if (
+    previous &&
+    previous !== number &&
+    numberToSocket.get(previous) === socket.id
+  ) {
+    numberToSocket.delete(previous);
+  }
 
-    respond({ ok: true, number });
-    console.log(`[socket] register ${number} -> ${socket.id}`);
+  // Register the same number with the new socket.
+  numberToSocket.set(number, socket.id);
+  socketToNumber.set(socket.id, number);
+
+  respond({
+    ok: true,
+    number,
   });
 
+  console.log(`[socket] register ${number} -> ${socket.id}`);
+});
+
   /* -------- CALL USER -------- */
-  socket.on('call-user', (payload = {}) => {
+  socket.on('call-user', async (payload = {}) => {
     const { callerName, targetNumber, offer } = payload;
     const callerNumber = socketToNumber.get(socket.id);
 
@@ -101,8 +180,60 @@ io.on('connection', (socket) => {
     const targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
 
     if (!targetSocketId || !targetSocket) {
-      return socket.emit('call-failed', { reason: 'offline' });
-    }
+  const subscription = pushSubscriptions.get(targetNumber);
+
+  if (!subscription) {
+    return socket.emit('call-failed', {
+      reason: 'offline',
+    });
+  }
+
+  // Store the complete call so it can be delivered
+  // when the receiver opens/reconnects later.
+  pendingCalls.set(targetNumber, {
+    callerName: callerName || 'Unknown',
+    callerNumber,
+    offer,
+    from: socket.id,
+    createdAt: Date.now(),
+  });
+
+  console.log(
+    `[call] pending call stored ${callerNumber} -> ${targetNumber}`
+  );
+
+  try {
+    await webpush.sendNotification(
+      subscription,
+      JSON.stringify({
+        type: 'incoming-call',
+        callerName: callerName || 'Unknown',
+        callerNumber,
+      })
+    );
+
+    console.log(
+      `[push] incoming call notification sent ${callerNumber} -> ${targetNumber}`
+    );
+
+    return socket.emit('call-notification-sent', {
+      targetNumber,
+    });
+  } catch (error) {
+    console.error(
+      `[push] failed for ${targetNumber}:`,
+      error
+    );
+
+    // Push failed, so don't keep a useless pending call.
+    pendingCalls.delete(targetNumber);
+    pushSubscriptions.delete(targetNumber);
+
+    return socket.emit('call-failed', {
+      reason: 'offline',
+    });
+  }
+}
     if (activeCalls.has(targetSocketId) || activeCalls.has(socket.id)) {
       return socket.emit('call-failed', { reason: 'busy' });
     }
@@ -121,10 +252,15 @@ io.on('connection', (socket) => {
   });
 
   /* -------- MAKE ANSWER -------- */
-  socket.on('make-answer', ({ to, answer } = {}) => {
-    if (!to || !answer) return;
-    io.to(to).emit('call-answered', { answer, from: socket.id });
+  socket.on('make-answer', ({ to, answer, receiverName } = {}) => {
+  if (!to || !answer) return;
+
+  io.to(to).emit('call-answered', {
+    answer,
+    from: socket.id,
+    receiverName: receiverName || 'Unknown',
   });
+});
 
   /* -------- ICE CANDIDATE -------- */
   socket.on('ice-candidate', ({ to, candidate } = {}) => {

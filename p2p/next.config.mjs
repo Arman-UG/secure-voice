@@ -1,11 +1,12 @@
-import withPWAInit from 'next-pwa';
+import withPWAInit from '@brainwires/next-pwa';
 
 const withPWA = withPWAInit({
   dest: 'public',
   register: true,
-  skipWaiting: true,
+  skipWaiting: false,
   disable: process.env.NODE_ENV === 'development',
   buildExcludes: [/middleware-manifest\.json$/],
+  swSrc: 'worker/service-worker.js',
 });
 
 /** @type {import('next').NextConfig} */
@@ -14,7 +15,6 @@ const nextConfig = {
   poweredByHeader: false,
   compress: true,
   productionBrowserSourceMaps: false,
-  turbopack: {}, 
   images: { unoptimized: true },
 };
 
