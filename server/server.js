@@ -11,13 +11,22 @@ const { Server } = require('socket.io');
 const { Pool } = require('pg');
 dotenv.config();
 
-const db = new Pool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT),
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-});
+const db = new Pool(
+  process.env.DATABASE_URL
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: {
+          rejectUnauthorized: false,
+        },
+      }
+    : {
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT),
+        database: process.env.DB_NAME,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+      }
+);
 
 db.query('SELECT NOW()')
   .then(() => {
