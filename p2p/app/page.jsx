@@ -164,6 +164,7 @@ export default function HomePage() {
     registerIdentity,
     requestNotificationPermission,
     logout,
+    deleteAccount,
 
     callState,
     incomingCall,
@@ -393,7 +394,7 @@ const handleRegistration = async (e) => {
         <div className="relative w-full max-w-md space-y-5">
 
           {/* Header */}
-
+ 
           <header className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--sv-border)] bg-[var(--sv-surface)]">
@@ -616,6 +617,22 @@ const handleRegistration = async (e) => {
           >
             Logout
           </button>
+
+          <button
+  type="button"
+  onClick={async () => {
+    const confirmed = window.confirm(
+      'Delete your Secure Voice account permanently?\n\nYour number will be removed from the database and you will need to register again.'
+    );
+
+    if (!confirmed) return;
+
+    await deleteAccount();
+  }}
+  className="mt-2 w-full rounded-xl border border-red-600/40 bg-red-600/10 px-4 py-3 text-sm font-semibold text-red-500 transition hover:bg-red-600/20"
+>
+  Delete Account
+</button>
 
           <p className="mt-3 border-t border-[var(--sv-border)] pt-3 text-xs leading-relaxed text-[var(--sv-subtle)]">
             <b className="font-medium text-[var(--sv-secondary)]">Share the numbers with your friends, family, or colleagues to call each other.</b>

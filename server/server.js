@@ -1,5 +1,6 @@
 'use strict';
 
+
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -7,6 +8,24 @@ const webpush = require('web-push');
 const dotenv = require('dotenv');
 dotenv.config();
 const { Server } = require('socket.io');
+const { Pool } = require('pg');
+dotenv.config();
+
+const db = new Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT),
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+});
+
+db.query('SELECT NOW()')
+  .then(() => {
+    console.log('[db] PostgreSQL connected successfully');
+  })
+  .catch((error) => {
+    console.error('[db] PostgreSQL connection failed:', error.message);
+  });
 
 const PORT = Number(process.env.PORT) || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || '*';
@@ -112,13 +131,13 @@ io.on('connection', (socket) => {
   console.log(`[socket] connected ${socket.id}`);
 
   /* -------- AUTO-REGISTER: server khud number dega -------- */
-socket.on('register', (payload = {}, ack) => {
-  const respond = typeof ack === 'function' ? ack : () => {};
+socket.on('register', async (payload = {}, ack) => {
+  const respond =
+    typeof ack === 'function' ? ack : () => {};
 
-  const number = payload && payload.number;
+  const number = payload?.number;
 
   // User must provide their own 10-digit number.
-  // No random number generation anymore.
   if (!isValidNumber(number)) {
     return respond({
       ok: false,
@@ -126,47 +145,183 @@ socket.on('register', (payload = {}, ack) => {
     });
   }
 
-  const existing = numberToSocket.get(number);
+  try {
+    // ------------------------------------------------------------
+    // Find the user in PostgreSQL.
+    // If the number does not exist, create it.
+    // ------------------------------------------------------------
+    let result = await db.query(
+      `
+      SELECT
+        id,
+        number,
+        name,
+        created_at,
+        is_blocked,
+        call_restricted_until
+      FROM public.users
+      WHERE number = $1
+      `,
+      [number]
+    );
 
-  if (existing && existing !== socket.id) {
-    // Check whether the old socket is actually still connected.
-    const existingSocket = io.sockets.sockets.get(existing);
+    let user = result.rows[0];
 
-    if (existingSocket) {
-      // Someone is genuinely using this number right now.
+    if (!user) {
+      result = await db.query(
+        `
+        INSERT INTO public.users (number)
+        VALUES ($1)
+        RETURNING
+          id,
+          number,
+          name,
+          created_at,
+          is_blocked,
+          call_restricted_until
+        `,
+        [number]
+      );
+
+      user = result.rows[0];
+
+      console.log(
+        `[db] user created ${number} -> id ${user.id}`
+      );
+    } else {
+      console.log(
+        `[db] user found ${number} -> id ${user.id}`
+      );
+    }
+
+    // ------------------------------------------------------------
+    // Existing socket-number logic
+    // ------------------------------------------------------------
+    const existing = numberToSocket.get(number);
+
+    if (existing && existing !== socket.id) {
+      // Check whether the old socket is actually still connected.
+      const existingSocket =
+        io.sockets.sockets.get(existing);
+
+      if (existingSocket) {
+        return respond({
+          ok: false,
+          error: 'Number already in use',
+        });
+      }
+
+      // Old socket is gone → remove stale mapping.
+      numberToSocket.delete(number);
+      socketToNumber.delete(existing);
+    }
+
+    // Remove any previous number belonging to this socket.
+    const previous = socketToNumber.get(socket.id);
+
+    if (
+      previous &&
+      previous !== number &&
+      numberToSocket.get(previous) === socket.id
+    ) {
+      numberToSocket.delete(previous);
+    }
+
+    // Register the number with the current socket.
+    numberToSocket.set(number, socket.id);
+    socketToNumber.set(socket.id, number);
+
+    respond({
+      ok: true,
+      number,
+      userId: user.id,
+    });
+
+    console.log(
+      `[socket] register ${number} -> ${socket.id}`
+    );
+  } catch (error) {
+    console.error(
+      `[db] registration failed for ${number}:`,
+      error
+    );
+
+    respond({
+      ok: false,
+      error: 'Database error',
+    });
+  }
+});
+
+
+/* -------- DELETE ACCOUNT -------- */
+
+socket.on('delete-account', async (ack) => {
+  const respond =
+    typeof ack === 'function' ? ack : () => {};
+
+  const number = socketToNumber.get(socket.id);
+
+  if (!number) {
+    return respond({
+      ok: false,
+      error: 'No registered account found.',
+    });
+  }
+
+  try {
+    const result = await db.query(
+      `
+      DELETE FROM public.users
+      WHERE number = $1
+      RETURNING id, number;
+      `,
+      [number]
+    );
+
+    if (result.rowCount === 0) {
       return respond({
         ok: false,
-        error: 'Number already in use',
+        error: 'Account not found.',
       });
     }
 
-    // Old socket is gone → remove stale mapping.
+    // Remove live socket mappings.
     numberToSocket.delete(number);
-    socketToNumber.delete(existing);
+    socketToNumber.delete(socket.id);
+
+    // Remove push subscription mapping.
+    pushSubscriptions.delete(number);
+
+    // End any active call associated with this socket.
+    const peer = releaseCall(socket.id);
+
+    if (peer) {
+      io.to(peer).emit('peer-disconnected', {
+        from: socket.id,
+      });
+    }
+
+    console.log(
+      `[db] account deleted ${number} -> id ${result.rows[0].id}`
+    );
+
+    respond({
+      ok: true,
+    });
+  } catch (error) {
+    console.error(
+      `[db] account deletion failed for ${number}:`,
+      error
+    );
+
+    respond({
+      ok: false,
+      error: 'Could not delete account.',
+    });
   }
-
-  // Remove any previous number belonging to this socket.
-  const previous = socketToNumber.get(socket.id);
-
-  if (
-    previous &&
-    previous !== number &&
-    numberToSocket.get(previous) === socket.id
-  ) {
-    numberToSocket.delete(previous);
-  }
-
-  // Register the same number with the new socket.
-  numberToSocket.set(number, socket.id);
-  socketToNumber.set(socket.id, number);
-
-  respond({
-    ok: true,
-    number,
-  });
-
-  console.log(`[socket] register ${number} -> ${socket.id}`);
 });
+
 
   /* -------- CALL USER -------- */
   socket.on('call-user', async (payload = {}) => {

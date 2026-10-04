@@ -683,6 +683,76 @@ const logout = useCallback(async () => {
   }
 }, [setPhase, teardownPeer]);
 
+const deleteAccount = useCallback(async () => {
+  const socket = socketRef.current;
+  const currentNumber = myNumberRef.current;
+
+  if (!socket || !socket.connected || !currentNumber) {
+    setError('No registered account found.');
+    return false;
+  }
+
+  // Stop any active call/media first.
+  teardownPeer();
+
+  activeRecentCallIdRef.current = null;
+  callStartedAtRef.current = null;
+  pendingOfferRef.current = null;
+
+  setActivePeer(null);
+  setIncomingCall(null);
+  setPhase(CALL_STATE.IDLE);
+
+  try {
+    const result = await new Promise((resolve) => {
+      socket.emit('delete-account', (ack) => {
+        resolve(ack);
+      });
+    });
+
+    if (!result?.ok) {
+      setError(
+        result?.error || 'Could not delete account.'
+      );
+      return false;
+    }
+
+    // Remove saved identity from this device.
+    try {
+      localStorage.removeItem('secure-voice-my-name');
+      localStorage.removeItem('secure-voice-my-number');
+    } catch (_) {}
+
+    myNameRef.current = null;
+    myNumberRef.current = null;
+
+    setMyName(null);
+    setMyNumber(null);
+
+    setRegistrationError(null);
+    setError(null);
+    setNotice(
+      'Account deleted successfully. Please register again.'
+    );
+    setRegistrationRequired(true);
+
+    // Reconnect without the deleted identity.
+    socket.disconnect();
+    socket.connect();
+
+    return true;
+  } catch (error) {
+    console.error(
+      '[db] account deletion request failed:',
+      error
+    );
+
+    setError('Could not delete account.');
+    return false;
+  }
+}, [setPhase, teardownPeer]);
+
+
 
   /* =========================================================
      SOCKET LIFECYCLE
@@ -1208,6 +1278,7 @@ setRecentCalls((prev) => {
     registrationError,
     registerIdentity,
     logout,
+    deleteAccount,
     requestNotificationPermission,
     checkNotificationPermission,
     registerPushSubscription,
