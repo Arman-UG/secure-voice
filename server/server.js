@@ -237,14 +237,50 @@ socket.on('register', async (payload = {}, ack) => {
     }
 
     // Register the number with the current socket.
-    numberToSocket.set(number, socket.id);
-    socketToNumber.set(socket.id, number);
+    // Register the number with the current socket.
+numberToSocket.set(number, socket.id);
+socketToNumber.set(socket.id, number);
 
-    respond({
-      ok: true,
-      number,
-      userId: user.id,
+// ------------------------------------------------------------
+// Deliver a pending offline call, if one exists.
+// ------------------------------------------------------------
+const pending = pendingCalls.get(number);
+
+if (pending) {
+  const callerSocket = io.sockets.sockets.get(pending.from);
+
+  if (callerSocket) {
+    // Reconnect the call relationship.
+    activeCalls.set(socket.id, pending.from);
+    activeCalls.set(pending.from, socket.id);
+
+    socket.emit('incoming-call', {
+      callerName: pending.callerName,
+      callerNumber: pending.callerNumber,
+      offer: pending.offer,
+      from: pending.from,
     });
+
+    pendingCalls.delete(number);
+
+    console.log(
+      `[call] pending call delivered ${pending.callerNumber} -> ${number}`
+    );
+  } else {
+    // Caller is no longer connected, so the pending call is stale.
+    pendingCalls.delete(number);
+
+    console.log(
+      `[call] stale pending call removed for ${number}`
+    );
+  }
+}
+
+respond({
+  ok: true,
+  number,
+  userId: user.id,
+});
 
     console.log(
       `[socket] register ${number} -> ${socket.id}`
