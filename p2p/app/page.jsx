@@ -186,6 +186,11 @@ export default function HomePage() {
     contacts,
     removeContact,
     recentCalls,
+
+      ringtones,
+  selectedRingtone,
+  selectRingtone,
+    
   } = useWebRTC();
 
   const [isLightTheme, setIsLightTheme] = useState(false);
@@ -610,6 +615,36 @@ const handleRegistration = async (e) => {
             </p>
           )}
 
+                    <div className="mt-5 border-t border-[var(--sv-border)] pt-4">
+            <p className={SECTION_LABEL_CLASS}>
+              Call Sounds
+            </p>
+
+            <label
+              htmlFor="ringtone-select"
+              className="mt-3 block text-sm font-medium text-[var(--sv-secondary)]"
+            >
+              Ringtone
+            </label>
+
+            <select
+              id="ringtone-select"
+              value={selectedRingtone}
+              onChange={(e) => selectRingtone(e.target.value)}
+              className="mt-2 w-full rounded-xl border border-[var(--sv-border)] bg-[var(--sv-surface-2)] px-4 py-3 text-sm text-[var(--sv-text)] outline-none transition focus:border-[#EF1D1D] focus:ring-2 focus:ring-[#EF1D1D]/30"
+            >
+              {ringtones.map((ringtone) => (
+                <option key={ringtone.id} value={ringtone.id}>
+                  {ringtone.name}
+                </option>
+              ))}
+            </select>
+
+            <p className="mt-2 text-xs leading-relaxed text-[var(--sv-subtle)]">
+              This sound plays when you receive an incoming call.
+            </p>
+          </div>
+          
           <button
             type="button"
             onClick={logout}

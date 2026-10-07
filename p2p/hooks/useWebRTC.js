@@ -24,6 +24,15 @@ export const SOCKET_STATUS = Object.freeze({
   DISCONNECTED: 'disconnected',
 });
 
+const RINGTONES = Object.freeze([
+  {
+    id: 'secure-voice-default',
+    name: 'Secure Voice',
+    src: '/audio/ringtone.mp3',
+  },
+]);
+
+
 function describeMediaError(err) {
   if (!err) return 'Could not access your microphone.';
 
@@ -61,10 +70,8 @@ export default function useWebRTC() {
   const callStateRef = useRef(CALL_STATE.IDLE);
   const activeRecentCallIdRef = useRef(null);
   const callStartedAtRef = useRef(null);
-
-  const [socketStatus, setSocketStatus] = useState(
-    SOCKET_STATUS.CONNECTING
-  );
+  const ringtoneAudioRef = useRef(null);
+  const [socketStatus, setSocketStatus] = useState(SOCKET_STATUS.CONNECTING);
 
   const [myNumber, setMyNumber] = useState(null);
   const [myName, setMyName] = useState(null);
@@ -83,6 +90,9 @@ export default function useWebRTC() {
   const [contacts, setContacts] = useState([]);
   const [recentCalls, setRecentCalls] = useState([]);
   const [recentCallsLoaded, setRecentCallsLoaded] = useState(false);
+  const [selectedRingtone, setSelectedRingtone] = useState('secure-voice-default');
+
+  
 
   const setPhase = useCallback((p) => {
     callStateRef.current = p;
@@ -123,6 +133,100 @@ export default function useWebRTC() {
     peerSocketIdRef.current = null;
     pendingOfferRef.current = null;
   }, []);
+
+  const playRingtone = useCallback(async () => {
+  if (typeof window === 'undefined') return;
+
+  const selected = RINGTONES.find(
+    (ringtone) => ringtone.id === selectedRingtone
+  );
+
+  if (!selected) return;
+
+  try {
+    let audio = ringtoneAudioRef.current;
+
+    if (!audio || audio.src !== new URL(
+      selected.src,
+      window.location.href
+    ).href) {
+      audio?.pause?.();
+
+      audio = new Audio(selected.src);
+      audio.loop = true;
+      audio.preload = 'auto';
+
+      ringtoneAudioRef.current = audio;
+    }
+
+    audio.currentTime = 0;
+
+    await audio.play();
+  } catch (error) {
+    console.warn(
+      '[sound] Ringtone playback was blocked or failed:',
+      error
+    );
+  }
+}, [selectedRingtone]);
+
+const stopRingtone = useCallback(() => {
+  const audio = ringtoneAudioRef.current;
+
+  if (!audio) return;
+
+  try {
+    audio.pause();
+    audio.currentTime = 0;
+  } catch (_) {}
+}, []);
+
+useEffect(() => {
+  if (
+    callState === CALL_STATE.RINGING ||
+    callState === CALL_STATE.INCOMING
+  ) {
+    playRingtone();
+    return;
+  }
+
+  stopRingtone();
+}, [
+  callState,
+  playRingtone,
+  stopRingtone,
+]);
+
+const selectRingtone = useCallback((ringtoneId) => {
+  const exists = RINGTONES.some(
+    (ringtone) => ringtone.id === ringtoneId
+  );
+
+  if (!exists) return;
+
+  setSelectedRingtone(ringtoneId);
+
+  try {
+    localStorage.setItem(
+      'secure-voice-selected-ringtone',
+      ringtoneId
+    );
+  } catch (_) {}
+}, []);
+
+useEffect(() => {
+  return () => {
+    const audio = ringtoneAudioRef.current;
+
+    if (!audio) return;
+
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = '';
+    } catch (_) {}
+  };
+}, []);
 
 const finishCall = useCallback(
   (msg, kind = 'notice') => {
@@ -323,6 +427,21 @@ useEffect(() => {
   } finally {
     setRecentCallsLoaded(true);
   }
+}, []);
+
+useEffect(() => {
+  try {
+    const savedRingtone = localStorage.getItem(
+      'secure-voice-selected-ringtone'
+    );
+
+    if (
+      savedRingtone &&
+      RINGTONES.some((ringtone) => ringtone.id === savedRingtone)
+    ) {
+      setSelectedRingtone(savedRingtone);
+    }
+  } catch (_) {}
 }, []);
 
 /* -------- Save recent calls -------- */
@@ -1269,6 +1388,9 @@ setRecentCalls((prev) => {
      ========================================================= */
 
   return {
+    ringtones: RINGTONES,
+selectedRingtone,
+selectRingtone,
     socketStatus,
 
     myNumber,
