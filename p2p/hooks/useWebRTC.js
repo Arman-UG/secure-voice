@@ -91,6 +91,8 @@ export default function useWebRTC() {
   const [recentCalls, setRecentCalls] = useState([]);
   const [recentCallsLoaded, setRecentCallsLoaded] = useState(false);
   const [selectedRingtone, setSelectedRingtone] = useState('secure-voice-default');
+  const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false);
 
   
 
@@ -105,36 +107,39 @@ export default function useWebRTC() {
   }, []);
 
   const teardownPeer = useCallback(() => {
-    const pc = pcRef.current;
+  const pc = pcRef.current;
 
-    if (pc) {
-      pc.onicecandidate = null;
-      pc.ontrack = null;
-      pc.onconnectionstatechange = null;
+  if (pc) {
+    pc.onicecandidate = null;
+    pc.ontrack = null;
+    pc.onconnectionstatechange = null;
 
-      try {
-        pc.close();
-      } catch (_) {}
+    try {
+      pc.close();
+    } catch (_) {}
 
-      pcRef.current = null;
-    }
+    pcRef.current = null;
+  }
 
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
-      localStreamRef.current = null;
-    }
+  if (localStreamRef.current) {
+    localStreamRef.current.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+  }
 
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = null;
-    }
+  if (remoteAudioRef.current) {
+    remoteAudioRef.current.srcObject = null;
+  }
 
-    outboundIceRef.current = [];
-    inboundIceRef.current = [];
-    peerSocketIdRef.current = null;
-    pendingOfferRef.current = null;
-  }, []);
+  outboundIceRef.current = [];
+  inboundIceRef.current = [];
+  peerSocketIdRef.current = null;
+  pendingOfferRef.current = null;
 
-  const playRingtone = useCallback(async () => {
+  isMutedRef.current = false;
+  setIsMuted(false);
+}, [setIsMuted]);
+
+const playRingtone = useCallback(async () => {
   if (typeof window === 'undefined') return;
 
   const selected = RINGTONES.find(
@@ -151,16 +156,13 @@ export default function useWebRTC() {
       window.location.href
     ).href) {
       audio?.pause?.();
-
       audio = new Audio(selected.src);
       audio.loop = true;
       audio.preload = 'auto';
-
       ringtoneAudioRef.current = audio;
     }
 
     audio.currentTime = 0;
-
     await audio.play();
   } catch (error) {
     console.warn(
@@ -280,6 +282,64 @@ const finishCall = useCallback(
     localStreamRef.current = stream;
     return stream;
   }, []);
+
+  const toggleMute = useCallback(() => {
+  const stream = localStreamRef.current;
+  if (!stream) return;
+
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks.length) return;
+
+  const nextMuted = !isMutedRef.current;
+
+  audioTracks.forEach((track) => {
+    track.enabled = !nextMuted;
+  });
+
+  isMutedRef.current = nextMuted;
+  setIsMuted(nextMuted);
+}, []);
+
+const canSendDtmf = useCallback(() => {
+  const pc = pcRef.current;
+  if (!pc || typeof pc.getSenders !== 'function') return false;
+
+  const sender = pc
+    .getSenders()
+    .find((s) => s.track && s.track.kind === 'audio');
+
+  return Boolean(
+    sender &&
+      sender.dtmf &&
+      typeof sender.dtmf.insertDTMF === 'function'
+  );
+}, []);
+
+const sendDtmf = useCallback((tone) => {
+  const cleanTone = String(tone || '');
+
+  if (!/^[0-9*#]$/.test(cleanTone)) return false;
+
+  const pc = pcRef.current;
+  if (!pc || typeof pc.getSenders !== 'function') return false;
+
+  const sender = pc
+    .getSenders()
+    .find((s) => s.track && s.track.kind === 'audio');
+
+  const dtmf = sender?.dtmf;
+
+  if (!dtmf || typeof dtmf.insertDTMF !== 'function') {
+    return false;
+  }
+
+  try {
+    dtmf.insertDTMF(cleanTone, 120, 70);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}, []);
 
   const flushOutboundIce = useCallback(() => {
     const to = peerSocketIdRef.current;
@@ -651,12 +711,25 @@ const registerPushSubscription = useCallback(async (number) => {
       return;
     }
 
-    const subscription =
-      await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey:
-          urlBase64ToUint8Array(vapidPublicKey),
-      });
+    /*
+     * Reuse the existing push subscription when possible.
+     * Only create a new one if this device/browser has none.
+     */
+    let subscription =
+      await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription =
+        await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey:
+            urlBase64ToUint8Array(vapidPublicKey),
+        });
+
+      console.log('[push] New subscription created.');
+    } else {
+      console.log('[push] Existing subscription reused.');
+    }
 
     const response = await fetch(
       `${SIGNALING_URL}/push/subscribe`,
@@ -684,7 +757,10 @@ const registerPushSubscription = useCallback(async (number) => {
       `[push] subscription registered for ${number}`
     );
   } catch (err) {
-    console.error('[push] Registration failed:', err);
+    console.error(
+      '[push] Registration failed:',
+      err
+    );
   }
 }, []);
 
@@ -1031,6 +1107,11 @@ const deleteAccount = useCallback(async () => {
 
       const cleanReceiverName =
         String(receiverName || '').trim() || 'Unknown';
+        setActivePeer((peer) =>
+  peer
+    ? { ...peer, name: cleanReceiverName }
+    : peer
+);
 
       setRecentCalls((prev) =>
         prev.map((call) =>
@@ -1391,6 +1472,7 @@ setRecentCalls((prev) => {
     ringtones: RINGTONES,
 selectedRingtone,
 selectRingtone,
+
     socketStatus,
 
     myNumber,
@@ -1426,6 +1508,11 @@ selectRingtone,
     acceptCall,
     rejectCall,
     hangUp,
+
+    isMuted,
+    toggleMute,
+    canSendDtmf,
+    sendDtmf,
 
     clearMessages,
   };

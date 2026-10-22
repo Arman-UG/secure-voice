@@ -55,7 +55,6 @@ const server = http.createServer(app);
 const numberToSocket = new Map(); // number -> socket.id
 const socketToNumber = new Map(); // socket.id -> number
 const activeCalls = new Map();    // socket.id -> peer socket.id
-const pushSubscriptions = new Map();  // number -> push subscription
 const pendingCalls = new Map(); // target number -> pending incoming call
 
 const isValidNumber = (v) => typeof v === 'string' && /^\d{10}$/.test(v);
@@ -93,7 +92,7 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.post('/push/subscribe', (req, res) => {
+app.post('/push/subscribe', async (req, res) => {
   const { number, subscription } = req.body || {};
 
   if (!isValidNumber(number)) {
@@ -110,16 +109,43 @@ app.post('/push/subscribe', (req, res) => {
     });
   }
 
-  pushSubscriptions.set(number, subscription);
+  try {
+    await db.query(
+      `
+      INSERT INTO public.push_subscriptions (
+        number,
+        subscription,
+        updated_at
+      )
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (number)
+      DO UPDATE SET
+        subscription = EXCLUDED.subscription,
+        updated_at = NOW()
+      `,
+      [number, JSON.stringify(subscription)]
+    );
 
-  console.log(`[push] subscription saved for ${number}`);
+    console.log(`[push] subscription saved to Neon for ${number}`);
 
-  return res.json({
-    ok: true,
-  });
+    return res.json({
+      ok: true,
+    });
+  } catch (error) {
+    console.error(
+      `[push] failed to save subscription for ${number}:`,
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: 'Could not save push subscription',
+    });
+  }
 });
 
-app.post('/push/unsubscribe', (req, res) => {
+
+app.post('/push/unsubscribe', async (req, res) => {
   const { number } = req.body || {};
 
   if (!isValidNumber(number)) {
@@ -129,11 +155,29 @@ app.post('/push/unsubscribe', (req, res) => {
     });
   }
 
-  pushSubscriptions.delete(number);
+  try {
+    await db.query(
+      `
+      DELETE FROM public.push_subscriptions
+      WHERE number = $1
+      `,
+      [number]
+    );
 
-  console.log(`[push] subscription removed for ${number}`);
+    console.log(`[push] subscription removed from Neon for ${number}`);
 
-  return res.json({ ok: true });
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error(
+      `[push] failed to remove subscription for ${number}:`,
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      error: 'Could not remove push subscription',
+    });
+  }
 });
 
 io.on('connection', (socket) => {
@@ -335,9 +379,6 @@ socket.on('delete-account', async (ack) => {
     numberToSocket.delete(number);
     socketToNumber.delete(socket.id);
 
-    // Remove push subscription mapping.
-    pushSubscriptions.delete(number);
-
     // End any active call associated with this socket.
     const peer = releaseCall(socket.id);
 
@@ -380,7 +421,16 @@ socket.on('delete-account', async (ack) => {
     const targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
 
     if (!targetSocketId || !targetSocket) {
-  const subscription = pushSubscriptions.get(targetNumber);
+  const subscriptionResult = await db.query(
+  `
+  SELECT subscription
+  FROM public.push_subscriptions
+  WHERE number = $1
+  `,
+  [targetNumber]
+);
+
+const subscription = subscriptionResult.rows[0]?.subscription;
 
   if (!subscription) {
     return socket.emit('call-failed', {
@@ -427,7 +477,13 @@ socket.on('delete-account', async (ack) => {
 
     // Push failed, so don't keep a useless pending call.
     pendingCalls.delete(targetNumber);
-    pushSubscriptions.delete(targetNumber);
+    await db.query(
+  `
+  DELETE FROM public.push_subscriptions
+  WHERE number = $1
+  `,
+  [targetNumber]
+);
 
     return socket.emit('call-failed', {
       reason: 'offline',
