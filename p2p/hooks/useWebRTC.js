@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import useCallHistory from './useCallHistory';
 
 const SIGNALING_URL =
   process.env.NEXT_PUBLIC_SIGNALING_URL || 'http://localhost:4000';
@@ -88,8 +89,15 @@ export default function useWebRTC() {
   const [notice, setNotice] = useState(null);
 
   const [contacts, setContacts] = useState([]);
-  const [recentCalls, setRecentCalls] = useState([]);
-  const [recentCallsLoaded, setRecentCallsLoaded] = useState(false);
+const {
+  recentCalls,
+  startCallRecord,
+  updateCallRecord,
+  markCallConnected,
+  finishCallRecord,
+  updateCallName,
+  deleteCallRecord,
+} = useCallHistory();
   const [selectedRingtone, setSelectedRingtone] = useState('secure-voice-default');
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(false);
@@ -231,23 +239,11 @@ useEffect(() => {
 }, []);
 
 const finishCall = useCallback(
-  (msg, kind = 'notice') => {
-    const startedAt = callStartedAtRef.current;
+  (msg, kind = 'notice', historyStatus = 'completed') => {
     const recentCallId = activeRecentCallIdRef.current;
 
-    if (startedAt && recentCallId) {
-      const duration = Math.max(0, Date.now() - startedAt);
-
-      setRecentCalls((prev) =>
-        prev.map((call) =>
-          call.id === recentCallId
-            ? {
-                ...call,
-                duration,
-              }
-            : call
-        )
-      );
+    if (recentCallId) {
+      finishCallRecord(recentCallId, historyStatus);
     }
 
     callStartedAtRef.current = null;
@@ -268,7 +264,7 @@ const finishCall = useCallback(
       }
     }
   },
-  [setPhase, teardownPeer]
+  [finishCallRecord, setPhase, teardownPeer]
 );
 
   const ensureLocalStream = useCallback(async () => {
@@ -471,76 +467,15 @@ const sendDtmf = useCallback((tone) => {
     } catch (_) {}
   }, []);
 
-  /* -------- Load recent calls -------- */
-
-useEffect(() => {
-  try {
-    const saved = localStorage.getItem(
-      'secure-voice-recent-calls'
-    );
-
-    if (saved) {
-      setRecentCalls(JSON.parse(saved));
-    }
-  } catch (_) {
-    // Ignore invalid localStorage data
-  } finally {
-    setRecentCallsLoaded(true);
-  }
-}, []);
-
-useEffect(() => {
-  try {
-    const savedRingtone = localStorage.getItem(
-      'secure-voice-selected-ringtone'
-    );
-
-    if (
-      savedRingtone &&
-      RINGTONES.some((ringtone) => ringtone.id === savedRingtone)
-    ) {
-      setSelectedRingtone(savedRingtone);
-    }
-  } catch (_) {}
-}, []);
-
 /* -------- Save recent calls -------- */
 
-useEffect(() => {
-  if (!recentCallsLoaded) return;
-
-  try {
-    localStorage.setItem(
-      'secure-voice-recent-calls',
-      JSON.stringify(recentCalls)
-    );
-  } catch (_) {}
-}, [recentCalls, recentCallsLoaded]);
-
 const updateRecentCallName = useCallback((id, newName) => {
-  const cleanName = String(newName || '').trim();
-
-  if (!id || !cleanName) return;
-
-  setRecentCalls((prev) =>
-    prev.map((call) =>
-      call.id === id
-        ? {
-            ...call,
-            name: cleanName,
-          }
-        : call
-    )
-  );
-}, []);
+  updateCallName(id, newName);
+}, [updateCallName]);
 
 const deleteRecentCall = useCallback((id) => {
-  if (!id) return;
-
-  setRecentCalls((prev) =>
-    prev.filter((call) => call.id !== id)
-  );
-}, []);
+  deleteCallRecord(id);
+}, [deleteCallRecord]);
 
 const shareRecentCall = useCallback(async (call) => {
   if (!call || !call.number) return;
@@ -1074,6 +1009,17 @@ const deleteAccount = useCallback(async () => {
           from,
         };
 
+        const recentCallId = `${Date.now()}-${callerNumber}-incoming`;
+
+activeRecentCallIdRef.current = recentCallId;
+
+startCallRecord({
+  id: recentCallId,
+  name: callerName || 'Unknown',
+  number: callerNumber,
+  direction: 'incoming',
+});
+
         setIncomingCall({
           callerName,
           callerNumber,
@@ -1113,19 +1059,13 @@ const deleteAccount = useCallback(async () => {
     : peer
 );
 
-      setRecentCalls((prev) =>
-        prev.map((call) =>
-          call.id === activeRecentCallIdRef.current
-            ? {
-                ...call,
-                name: cleanReceiverName,
-              }
-            : call
-        )
-      );
+      updateCallRecord(activeRecentCallIdRef.current, {
+  name: cleanReceiverName,
+});
 
-      callStartedAtRef.current = Date.now();
-      setPhase(CALL_STATE.IN_CALL);
+callStartedAtRef.current = Date.now();
+markCallConnected(activeRecentCallIdRef.current);
+setPhase(CALL_STATE.IN_CALL);
     } catch (_) {
       finishCall(
         'Call setup failed.',
@@ -1283,25 +1223,23 @@ const deleteAccount = useCallback(async () => {
           CALL_STATE.RINGING
         );
         
-        const recentCallId = `${Date.now()}-${targetNumber}`;
+  const recentCallId = `${Date.now()}-${targetNumber}`;
 activeRecentCallIdRef.current = recentCallId;
 
-setRecentCalls((prev) => {
-  const existingCall = prev.find(
-    (call) => call.number === targetNumber
-  );
 
-  return [
-    {
-      id: recentCallId,
-      number: targetNumber,
-      name: existingCall?.name || 'Unknown',
-      direction: 'outgoing',
-      timestamp: Date.now(),
-    },
-    ...prev,
-  ];
+const existingCall = recentCalls.find(
+  (call) =>
+    call.number === targetNumber &&
+    call.name !== 'Unknown'
+);
+
+startCallRecord({
+  id: recentCallId,
+  number: targetNumber,
+  name: existingCall?.name || 'Unknown',
+  direction: 'outgoing',
 });
+
         socket.emit('call-user', {
           callerName,
           targetNumber,
@@ -1321,12 +1259,13 @@ setRecentCalls((prev) => {
       }
     },
     [
-      createPeerConnection,
-      ensureLocalStream,
-      setPhase,
-      teardownPeer,
-      setRecentCalls,
-    ]
+  createPeerConnection,
+  ensureLocalStream,
+  setPhase,
+  teardownPeer,
+  recentCalls,
+  startCallRecord,
+]
   );
 
   /* =========================================================
@@ -1394,6 +1333,7 @@ setRecentCalls((prev) => {
         setIncomingCall(null);
 
         callStartedAtRef.current = Date.now();
+        markCallConnected(activeRecentCallIdRef.current);
         setPhase(CALL_STATE.IN_CALL);
       } catch (err) {
         if (
@@ -1408,17 +1348,19 @@ setRecentCalls((prev) => {
 
         finishCall(
           describeMediaError(err),
+
           'error'
         );
       }
     },
     [
-      createPeerConnection,
+      markCallConnected,
       ensureLocalStream,
-      finishCall,
+      createPeerConnection,
       flushInboundIce,
       flushOutboundIce,
       setPhase,
+      finishCall,
     ]
   );
 
@@ -1460,7 +1402,6 @@ setRecentCalls((prev) => {
         { to: peer }
       );
     }
-
     finishCall('Call ended.');
   }, [finishCall]);
 
