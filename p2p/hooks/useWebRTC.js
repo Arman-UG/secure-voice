@@ -193,9 +193,7 @@ const stopRingtone = useCallback(() => {
 
 useEffect(() => {
   if (
-    callState === CALL_STATE.RINGING ||
-    callState === CALL_STATE.INCOMING
-  ) {
+    callState === CALL_STATE.RINGING) {
     playRingtone();
     return;
   }
@@ -271,7 +269,11 @@ const finishCall = useCallback(
     if (localStreamRef.current) return localStreamRef.current;
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: {
+        noiseSuppression: true,
+        echoCancellation: true,
+        autoGainControl: true,
+      },
       video: false,
     });
 
@@ -401,14 +403,26 @@ const sendDtmf = useCallback((tone) => {
       }
     };
 
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') {
-        finishCall(
-          'Connection failed. Peer offline ho gaya.',
-          'error'
-        );
-      }
-    };
+
+pc.onconnectionstatechange = () => {
+  console.log('[RTC] Connection state:', pc.connectionState);
+  
+  if (pc.connectionState === 'failed') {
+    finishCall(
+      'Connection failed. Peer offline ho gaya.',
+      'error'
+    );
+  }
+};
+
+pc.oniceconnectionstatechange = () => {
+  console.log('[RTC] ICE connection state:', pc.iceConnectionState);
+};
+
+pc.onicegatheringstatechange = () => {
+  console.log('[RTC] ICE gathering state:', pc.iceGatheringState);
+};
+
 
     pcRef.current = pc;
     return pc;
@@ -1374,7 +1388,7 @@ startCallRecord({
 
     const socket =
       socketRef.current;
-
+ 
     if (pending && socket) {
       socket.emit(
         'reject-call',

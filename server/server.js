@@ -102,6 +102,8 @@ app.post('/push/subscribe', async (req, res) => {
     });
   }
 
+  
+
   if (!subscription || typeof subscription !== 'object') {
     return res.status(400).json({
       ok: false,
