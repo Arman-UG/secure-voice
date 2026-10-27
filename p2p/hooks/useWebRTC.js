@@ -4,6 +4,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import useCallHistory from './useCallHistory';
 
+function getOrCreateDeviceId() {
+  try {
+    let deviceId = localStorage.getItem('secure-voice-device-id');
+
+    if (!deviceId) {
+      deviceId = crypto.randomUUID();
+      localStorage.setItem('secure-voice-device-id', deviceId);
+    }
+
+    return deviceId;
+  } catch (error) {
+    console.error('Could not identify this device:', error);
+    return null;
+  }
+}
+
 const SIGNALING_URL =
   process.env.NEXT_PUBLIC_SIGNALING_URL || 'http://localhost:4000';
 
@@ -787,9 +803,18 @@ const registerIdentity = useCallback(
         return false;
       }
 
+      const deviceId = getOrCreateDeviceId();
+
+      if (!deviceId) {
+        setRegistrationError(
+          'Could not identify this device. Please enable browser storage.'
+        );
+        return false;
+      }
+
       socket.emit(
         'register',
-        { number },
+        { number, deviceId },
         (ack) => {
       if (ack && ack.ok) {
         saveIdentityLocally(name, ack.number);
@@ -982,9 +1007,18 @@ const deleteAccount = useCallback(async () => {
        */
 
       if (savedNumber && /^\d{10}$/.test(savedNumber)) {
+
+        const deviceId = getOrCreateDeviceId();
+
+        if (!deviceId) {
+          setRegistrationRequired(true);
+          setRegistrationError('Could not identify this device.');
+          return;
+        }
+
         socket.emit(
           'register',
-          { number: savedNumber },
+          { number: savedNumber, deviceId: getOrCreateDeviceId() },
           (ack) => {
             if (ack && ack.ok) {
               myNumberRef.current = ack.number;

@@ -186,13 +186,27 @@ io.on('connection', (socket) => {
   console.log(`[socket] connected ${socket.id}`);
 
   /* -------- AUTO-REGISTER: server khud number dega -------- */
+
 socket.on('register', async (payload = {}, ack) => {
   const respond =
     typeof ack === 'function' ? ack : () => {};
 
   const number = payload?.number;
+  const deviceId = payload?.deviceId;
 
-  // User must provide their own 10-digit number.
+  // Validate device identity.
+  if (
+    typeof deviceId !== 'string' ||
+    deviceId.length < 10 ||
+    deviceId.length > 100
+  ) {
+    return respond({
+      ok: false,
+      error: 'Invalid device identity. Please refresh and try again.',
+    });
+  }
+
+  // Validate phone number.
   if (!isValidNumber(number)) {
     return respond({
       ok: false,
@@ -201,16 +215,14 @@ socket.on('register', async (payload = {}, ack) => {
   }
 
   try {
-    // ------------------------------------------------------------
-    // Find the user in PostgreSQL.
-    // If the number does not exist, create it.
-    // ------------------------------------------------------------
+    // Find the existing user.
     let result = await db.query(
       `
       SELECT
         id,
         number,
         name,
+        device_id,
         created_at,
         is_blocked,
         call_restricted_until
@@ -222,6 +234,7 @@ socket.on('register', async (payload = {}, ack) => {
 
     let user = result.rows[0];
 
+    // Create the user if this number does not exist yet.
     if (!user) {
       result = await db.query(
         `
@@ -231,6 +244,7 @@ socket.on('register', async (payload = {}, ack) => {
           id,
           number,
           name,
+          device_id,
           created_at,
           is_blocked,
           call_restricted_until
@@ -249,29 +263,74 @@ socket.on('register', async (payload = {}, ack) => {
       );
     }
 
-    // ------------------------------------------------------------
-    // Existing socket-number logic
-    // ------------------------------------------------------------
+    // Assign an unclaimed number to its first device.
+    if (!user.device_id) {
+      const claim = await db.query(
+        `
+        UPDATE public.users
+        SET device_id = $1
+        WHERE number = $2
+          AND device_id IS NULL
+        RETURNING device_id
+        `,
+        [deviceId, number]
+      );
+
+      if (claim.rows.length > 0) {
+        user.device_id = claim.rows[0].device_id;
+      } else {
+        // Another connection may have claimed it first.
+        const latest = await db.query(
+          `
+          SELECT device_id
+          FROM public.users
+          WHERE number = $1
+          `,
+          [number]
+        );
+
+        user.device_id =
+          latest.rows[0]?.device_id || null;
+      }
+    }
+
+    // Reject a different device before registering its socket.
+    if (!user.device_id || user.device_id !== deviceId) {
+      return respond({
+        ok: false,
+        error: 'This number is registered on another device.',
+      });
+    }
+
+    // Allow the same device to reconnect after refreshing.
     const existing = numberToSocket.get(number);
 
     if (existing && existing !== socket.id) {
-      // Check whether the old socket is actually still connected.
-      const existingSocket =
-        io.sockets.sockets.get(existing);
+      const existingSocket = io.sockets.sockets.get(existing);
 
       if (existingSocket) {
-        return respond({
-          ok: false,
-          error: 'Number already in use',
-        });
-      }
+        // Remove the old mapping first so its disconnect handler
+        // cannot accidentally remove the new socket's mapping.
+        socketToNumber.delete(existing);
+        numberToSocket.set(number, socket.id);
 
-      // Old socket is gone → remove stale mapping.
-      numberToSocket.delete(number);
-      socketToNumber.delete(existing);
+        // End any call belonging to the old socket.
+        const peer = releaseCall(existing);
+
+        if (peer) {
+          io.to(peer).emit('peer-disconnected', {
+            from: existing,
+          });
+        }
+
+        existingSocket.disconnect(true);
+      } else {
+        numberToSocket.delete(number);
+        socketToNumber.delete(existing);
+      }
     }
 
-    // Remove any previous number belonging to this socket.
+    // Remove any different number previously registered to this socket.
     const previous = socketToNumber.get(socket.id);
 
     if (
@@ -282,51 +341,46 @@ socket.on('register', async (payload = {}, ack) => {
       numberToSocket.delete(previous);
     }
 
-    // Register the number with the current socket.
-    // Register the number with the current socket.
-numberToSocket.set(number, socket.id);
-socketToNumber.set(socket.id, number);
+    // Register this socket.
+    numberToSocket.set(number, socket.id);
+    socketToNumber.set(socket.id, number);
 
-// ------------------------------------------------------------
-// Deliver a pending offline call, if one exists.
-// ------------------------------------------------------------
-const pending = pendingCalls.get(number);
+    // Deliver a pending offline call, if one exists.
+    const pending = pendingCalls.get(number);
 
-if (pending) {
-  const callerSocket = io.sockets.sockets.get(pending.from);
+    if (pending) {
+      const callerSocket = io.sockets.sockets.get(pending.from);
 
-  if (callerSocket) {
-    // Reconnect the call relationship.
-    activeCalls.set(socket.id, pending.from);
-    activeCalls.set(pending.from, socket.id);
+      if (callerSocket) {
+        activeCalls.set(socket.id, pending.from);
+        activeCalls.set(pending.from, socket.id);
 
-    socket.emit('incoming-call', {
-      callerName: pending.callerName,
-      callerNumber: pending.callerNumber,
-      offer: pending.offer,
-      from: pending.from,
+        socket.emit('incoming-call', {
+          callerName: pending.callerName,
+          callerNumber: pending.callerNumber,
+          offer: pending.offer,
+          from: pending.from,
+        });
+
+        pendingCalls.delete(number);
+
+        console.log(
+          `[call] pending call delivered ${pending.callerNumber} -> ${number}`
+        );
+      } else {
+        pendingCalls.delete(number);
+
+        console.log(
+          `[call] stale pending call removed for ${number}`
+        );
+      }
+    }
+
+    respond({
+      ok: true,
+      number,
+      userId: user.id,
     });
-
-    pendingCalls.delete(number);
-
-    console.log(
-      `[call] pending call delivered ${pending.callerNumber} -> ${number}`
-    );
-  } else {
-    // Caller is no longer connected, so the pending call is stale.
-    pendingCalls.delete(number);
-
-    console.log(
-      `[call] stale pending call removed for ${number}`
-    );
-  }
-}
-
-respond({
-  ok: true,
-  number,
-  userId: user.id,
-});
 
     console.log(
       `[socket] register ${number} -> ${socket.id}`
