@@ -72,6 +72,7 @@ export default function useWebRTC() {
   const activeRecentCallIdRef = useRef(null);
   const callStartedAtRef = useRef(null);
   const ringtoneAudioRef = useRef(null);
+  const ringbackAudioRef = useRef(null);
   const [socketStatus, setSocketStatus] = useState(SOCKET_STATUS.CONNECTING);
 
   const [myNumber, setMyNumber] = useState(null);
@@ -147,6 +148,7 @@ const {
   setIsMuted(false);
 }, [setIsMuted]);
 
+
 const playRingtone = useCallback(async () => {
   if (typeof window === 'undefined') return;
 
@@ -159,10 +161,10 @@ const playRingtone = useCallback(async () => {
   try {
     let audio = ringtoneAudioRef.current;
 
-    if (!audio || audio.src !== new URL(
-      selected.src,
-      window.location.href
-    ).href) {
+    if (
+      !audio ||
+      audio.src !== new URL(selected.src, window.location.href).href
+    ) {
       audio?.pause?.();
       audio = new Audio(selected.src);
       audio.loop = true;
@@ -173,16 +175,49 @@ const playRingtone = useCallback(async () => {
     audio.currentTime = 0;
     await audio.play();
   } catch (error) {
-    console.warn(
-      '[sound] Ringtone playback was blocked or failed:',
-      error
-    );
+    console.warn('[sound] Ringtone playback failed:', error);
   }
 }, [selectedRingtone]);
 
 const stopRingtone = useCallback(() => {
   const audio = ringtoneAudioRef.current;
+  if (!audio) return;
 
+  try {
+    audio.pause();
+    audio.currentTime = 0;
+  } catch (_) {}
+}, []);
+
+const playRingback = useCallback(async () => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    let audio = ringbackAudioRef.current;
+
+    if (
+      !audio ||
+      audio.src !== new URL(
+        '/audio/ringback.mp3',
+        window.location.href
+      ).href
+    ) {
+      audio?.pause?.();
+      audio = new Audio('/audio/ringback.mp3');
+      audio.loop = true;
+      audio.preload = 'auto';
+      ringbackAudioRef.current = audio;
+    }
+
+    audio.currentTime = 0;
+    await audio.play();
+  } catch (error) {
+    console.warn('[sound] Ringback playback failed:', error);
+  }
+}, []);
+
+const stopRingback = useCallback(() => {
+  const audio = ringbackAudioRef.current;
   if (!audio) return;
 
   try {
@@ -192,18 +227,24 @@ const stopRingtone = useCallback(() => {
 }, []);
 
 useEffect(() => {
-  if (
-    callState === CALL_STATE.RINGING) {
+  if (callState === CALL_STATE.RINGING) {
+    stopRingtone();
+    playRingback();
+  } else if (callState === CALL_STATE.INCOMING) {
+    stopRingback();
     playRingtone();
-    return;
+  } else {
+    stopRingtone();
+    stopRingback();
   }
-
-  stopRingtone();
 }, [
   callState,
   playRingtone,
   stopRingtone,
+  playRingback,
+  stopRingback,
 ]);
+
 
 const selectRingtone = useCallback((ringtoneId) => {
   const exists = RINGTONES.some(
@@ -222,19 +263,23 @@ const selectRingtone = useCallback((ringtoneId) => {
   } catch (_) {}
 }, []);
 
+
 useEffect(() => {
   return () => {
-    const audio = ringtoneAudioRef.current;
+    [ringtoneAudioRef.current, ringbackAudioRef.current].forEach(
+      (audio) => {
+        if (!audio) return;
 
-    if (!audio) return;
-
-    try {
-      audio.pause();
-      audio.currentTime = 0;
-      audio.src = '';
-    } catch (_) {}
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.src = '';
+        } catch (_) {}
+      }
+    );
   };
 }, []);
+
 
 const finishCall = useCallback(
   (msg, kind = 'notice', historyStatus = 'completed') => {
