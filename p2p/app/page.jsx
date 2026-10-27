@@ -812,6 +812,8 @@ export default function HomePage() {
   const [activeMainSection, setActiveMainSection] = useState('hub');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [copiedMyNumber, setCopiedMyNumber] = useState(false);
+  const [pendingNotificationAction, setPendingNotificationAction] =
+  useState(null);
 
   useEffect(() => {
     try {
@@ -828,6 +830,98 @@ export default function HomePage() {
       );
     } catch (_) {}
   }, [isLightTheme]);
+
+  
+useEffect(() => {
+  if (typeof window === 'undefined') return;
+
+  
+const handleNotificationMessage = (event) => {
+  if (
+    event.data?.type !== 'SECURE_VOICE_CALL_ACTION' ||
+    !['accept', 'reject'].includes(event.data.action)
+  ) {
+    return;
+  }
+
+  // Confirm that React received the command.
+  event.ports?.[0]?.postMessage({
+    type: 'SECURE_VOICE_CALL_ACTION_ACK',
+    messageId: event.data.messageId,
+  });
+
+  console.log('[ACK] Notification command received:', event.data.action);
+
+  setPendingNotificationAction({
+    action: event.data.action,
+    callerNumber: event.data.callerNumber || '',
+  });
+};
+
+
+  navigator.serviceWorker?.addEventListener(
+    'message',
+    handleNotificationMessage
+  );
+
+  // Handle an action when the notification opened a new app window.
+  const params = new URLSearchParams(window.location.search);
+const action = params.get('callAction');
+const callerNumber = params.get('callerNumber') || '';
+
+if (action === 'accept' || action === 'reject') {
+  setPendingNotificationAction({
+    action,
+    callerNumber,
+  });
+
+  params.delete('callAction');
+  params.delete('callerNumber');
+
+  const query = params.toString();
+  const cleanUrl =
+    window.location.pathname +
+    (query ? `?${query}` : '') +
+    window.location.hash;
+
+  window.history.replaceState({}, '', cleanUrl);
+}
+
+  return () => {
+    navigator.serviceWorker?.removeEventListener(
+      'message',
+      handleNotificationMessage
+    );
+  };
+}, []);
+
+useEffect(() => {
+  if (!incomingCall || !pendingNotificationAction) return;
+
+  const { action, callerNumber } = pendingNotificationAction;
+
+  // Do not apply an action to a different caller.
+  if (
+    callerNumber &&
+    incomingCall.callerNumber !== callerNumber
+  ) {
+    return;
+  }
+
+  setPendingNotificationAction(null);
+
+  if (action === 'accept') {
+    acceptCall();
+  } else if (action === 'reject') {
+    rejectCall();
+  }
+}, [
+  incomingCall,
+  pendingNotificationAction,
+  acceptCall,
+  rejectCall,
+]);
+
 
   const themeVars = isLightTheme
     ? {
