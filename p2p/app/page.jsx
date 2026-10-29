@@ -1,5 +1,7 @@
 'use client';
 
+// DEPLOY TEST: JSX update check - 29 Oct 2026
+
 import { useState, useEffect, useRef } from 'react';
 import useWebRTC, {
   CALL_STATE,
