@@ -1205,6 +1205,57 @@ const deleteAccount = useCallback(async () => {
 
     console.log('[CALL] Call state is IDLE. Proceeding...');
 
+    // Display Android system notification for Socket.IO calls.
+const showIncomingCallNotification = async () => {
+  try {
+    if (
+      typeof window === 'undefined' ||
+      !('Notification' in window) ||
+      Notification.permission !== 'granted' ||
+      !('serviceWorker' in navigator)
+    ) {
+      console.warn(
+        '[NOTIFICATION] Cannot display incoming-call notification.'
+      );
+      return;
+    }
+
+    const registration = await navigator.serviceWorker.ready;
+
+    await registration.showNotification(
+      'Incoming Secure Voice Call',
+      {
+        body: `${callerName || 'Unknown'} (${callerNumber}) is calling you`,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: `secure-voice-incoming-call-${callerNumber}`,
+        renotify: true,
+        requireInteraction: true,
+        data: {
+          type: 'incoming-call',
+          callerName: callerName || 'Unknown',
+          callerNumber,
+        },
+        actions: [
+          { action: 'accept', title: 'Accept' },
+          { action: 'reject', title: 'Reject' },
+        ],
+      }
+    );
+
+    console.log(
+      '[NOTIFICATION] Incoming-call notification displayed.'
+    );
+  } catch (error) {
+    console.error(
+      '[NOTIFICATION] Failed to display incoming-call notification:',
+      error
+    );
+  }
+};
+
+void showIncomingCallNotification();
+
     pendingOfferRef.current = {
       callerName,
       callerNumber,
