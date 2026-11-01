@@ -1,10 +1,14 @@
-
+console.log('[SW] Service Worker loaded');
 import { precacheAndRoute } from 'workbox-precaching';
+
+console.log('[SW] Service Worker loaded');
+
 
 precacheAndRoute(self.__WB_MANIFEST);
 
 // Handle incoming push notifications.
 self.addEventListener('push', (event) => {
+  console.log(`[push] =======================`);
   console.log('[push] EVENT RECEIVED', event);
 
   if (!event.data) {
@@ -27,6 +31,7 @@ self.addEventListener('push', (event) => {
 
   const callerName = data.callerName || 'Unknown';
   const callerNumber = data.callerNumber || '';
+
 
   event.waitUntil(
     self.registration
@@ -55,6 +60,7 @@ self.addEventListener('push', (event) => {
       })
   );
 });
+
 
 // Handle notification clicks and Accept/Reject actions.
 self.addEventListener('notificationclick', (event) => {

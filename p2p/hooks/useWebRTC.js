@@ -634,46 +634,76 @@ const urlBase64ToUint8Array = (base64String) => {
   );
 };
 
-
 const requestNotificationPermission = useCallback(async () => {
   if (
     typeof window === 'undefined' ||
     !('Notification' in window)
   ) {
+    console.log('[NOTIFICATION] Browser does not support notifications');
     setNotificationPermission('unsupported');
     return false;
   }
+
+  // Permission check
+  console.log(
+    '[NOTIFICATION] Current permission:',
+    Notification.permission
+  );
+  console.log(
+    '[NOTIFICATION] Browser support:',
+    'Notification' in window
+  );
 
   const currentPermission = Notification.permission;
   setNotificationPermission(currentPermission);
 
   if (currentPermission === 'granted') {
+    console.log(
+      '[NOTIFICATION] Permission already granted'
+    );
     return true;
   }
 
   if (currentPermission === 'denied') {
-    console.log('[push] Notification permission is denied.');
+    console.log(
+      '[NOTIFICATION] Permission is denied'
+    );
     return false;
   }
 
   try {
     const permission = await Notification.requestPermission();
 
+    // Permission result
+    console.log(
+      '[NOTIFICATION] Permission result:',
+      permission
+    );
+
     setNotificationPermission(permission);
 
     if (permission !== 'granted') {
-      console.log('[push] Notification permission not granted.');
+      console.log(
+        '[push] Notification permission not granted.'
+      );
       return false;
     }
 
-    console.log('[push] Notification permission granted.');
+    console.log(
+      '[push] Notification permission granted.'
+    );
     return true;
   } catch (err) {
-    console.error('[push] Permission request failed:', err);
+    console.error(
+      '[push] Permission request failed:',
+      err
+    );
+
     setNotificationPermission('denied');
     return false;
   }
 }, []);
+
 
 const checkNotificationPermission = useCallback(() => {
   if (
@@ -691,7 +721,19 @@ const checkNotificationPermission = useCallback(() => {
 }, []);
 
 const registerPushSubscription = useCallback(async (number) => {
-  if (!number) return;
+  console.log('[PUSH] Registration started for:', number);
+
+  if (!number) {
+    console.log('[PUSH] No phone number provided.');
+    return;
+  }
+
+  console.log('[PUSH] Environment check:', {
+    serviceWorker: 'serviceWorker' in navigator,
+    pushManager: 'PushManager' in window,
+    notification: 'Notification' in window,
+    permission: Notification?.permission,
+  });
 
   if (
     typeof window === 'undefined' ||
@@ -699,6 +741,7 @@ const registerPushSubscription = useCallback(async (number) => {
     !('PushManager' in window) ||
     !('Notification' in window)
   ) {
+    console.log('[PUSH] Browser does not support Push API.');
     return;
   }
 
@@ -710,11 +753,21 @@ const registerPushSubscription = useCallback(async (number) => {
   }
 
   try {
-    const registration =
-      await navigator.serviceWorker.ready;
+    const registration = await navigator.serviceWorker.ready;
+
+    console.log('[PUSH] Service worker ready:', {
+      scope: registration.scope,
+      active: registration.active?.state,
+      controller: navigator.serviceWorker.controller?.state,
+    });
 
     const vapidPublicKey =
       process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+
+    console.log(
+      '[PUSH] VAPID key exists:',
+      !!vapidPublicKey
+    );
 
     if (!vapidPublicKey) {
       console.error('[push] VAPID public key missing.');
@@ -728,7 +781,16 @@ const registerPushSubscription = useCallback(async (number) => {
     let subscription =
       await registration.pushManager.getSubscription();
 
+    console.log(
+      '[PUSH] Existing subscription:',
+      !!subscription
+    );
+
     if (!subscription) {
+      console.log(
+        '[PUSH] Creating new subscription...'
+      );
+
       subscription =
         await registration.pushManager.subscribe({
           userVisibleOnly: true,
@@ -740,6 +802,15 @@ const registerPushSubscription = useCallback(async (number) => {
     } else {
       console.log('[push] Existing subscription reused.');
     }
+
+    console.log(
+      '[PUSH] Subscription endpoint:',
+      subscription.endpoint
+    );
+
+    console.log(
+      '[PUSH] Sending subscription to server...'
+    );
 
     const response = await fetch(
       `${SIGNALING_URL}/push/subscribe`,
@@ -755,7 +826,17 @@ const registerPushSubscription = useCallback(async (number) => {
       }
     );
 
+    console.log(
+      '[PUSH] Server response status:',
+      response.status
+    );
+
     const result = await response.json();
+
+    console.log(
+      '[PUSH] Server response:',
+      result
+    );
 
     if (!response.ok || !result.ok) {
       throw new Error(
@@ -1088,47 +1169,107 @@ const deleteAccount = useCallback(async () => {
     });
 
     socket.on(
-      'incoming-call',
-      ({ callerName, callerNumber, offer, from }) => {
-        if (callStateRef.current !== CALL_STATE.IDLE) {
-          socket.emit('reject-call', { to: from });
-          return;
-        }
+  'incoming-call',
+  ({ callerName, callerNumber, offer, from }) => {
+    console.log('[CALL] Incoming call event received:', {
+      callerName,
+      callerNumber,
+      from,
+      currentState: callStateRef.current,
+      timestamp: new Date().toISOString(),
+    });
 
-        pendingOfferRef.current = {
-          callerName,
-          callerNumber,
-          offer,
-          from,
-        };
+    // Notification diagnostics
+    console.log('[CALL] Notification diagnostics:', {
+      permission:
+        typeof Notification !== 'undefined'
+          ? Notification.permission
+          : 'unsupported',
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      serviceWorkerSupported:
+        'serviceWorker' in navigator,
+      pushManagerSupported:
+        'PushManager' in window,
+    });
 
-        const recentCallId = `${Date.now()}-${callerNumber}-incoming`;
+    if (callStateRef.current !== CALL_STATE.IDLE) {
+      console.log(
+        '[CALL] Rejecting incoming call because current state is:',
+        callStateRef.current
+      );
 
-activeRecentCallIdRef.current = recentCallId;
+      socket.emit('reject-call', { to: from });
+      return;
+    }
 
-startCallRecord({
-  id: recentCallId,
-  name: callerName || 'Unknown',
-  number: callerNumber,
-  direction: 'incoming',
-});
+    console.log('[CALL] Call state is IDLE. Proceeding...');
 
-        setIncomingCall({
-          callerName,
-          callerNumber,
-        });
+    pendingOfferRef.current = {
+      callerName,
+      callerNumber,
+      offer,
+      from,
+    };
 
-        setActivePeer({
-          name: callerName,
-          number: callerNumber,
-        });
+    console.log('[CALL] Pending offer stored.');
 
-        setError(null);
-        setNotice(null);
+    const recentCallId = `${Date.now()}-${callerNumber}-incoming`;
 
-        setPhase(CALL_STATE.INCOMING);
-      }
+    console.log('[CALL] Recent call ID generated:', recentCallId);
+
+    activeRecentCallIdRef.current = recentCallId;
+
+    console.log(
+      '[CALL] Active recent call ID updated:',
+      activeRecentCallIdRef.current
     );
+
+    startCallRecord({
+      id: recentCallId,
+      name: callerName || 'Unknown',
+      number: callerNumber,
+      direction: 'incoming',
+    });
+
+    console.log('[CALL] Call record created:', {
+      id: recentCallId,
+      callerName,
+      callerNumber,
+    });
+
+    setIncomingCall({
+      callerName,
+      callerNumber,
+    });
+
+    console.log('[CALL] Incoming call state updated.');
+
+    setActivePeer({
+      name: callerName,
+      number: callerNumber,
+    });
+
+    console.log('[CALL] Active peer set:', {
+      name: callerName,
+      number: callerNumber,
+    });
+
+    setError(null);
+    setNotice(null);
+
+    console.log('[CALL] Error and notices cleared.');
+
+    setPhase(CALL_STATE.INCOMING);
+
+    console.log(
+      '[CALL] Phase changed:',
+      CALL_STATE.INCOMING
+    );
+
+    console.log('[CALL] Incoming call setup complete.');
+  }
+);
 
     socket.on(
   'call-answered',
