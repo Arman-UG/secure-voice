@@ -163,6 +163,41 @@ app.post('/push/unsubscribe', async (req, res) => {
   }
 });
 
+// TEMPORARY test route. Test ke baad delete kar dena.
+app.get('/push/test/:number', async (req, res) => {
+  const { number } = req.params;
+
+  if (!isValidNumber(number)) {
+    return res.status(400).json({ ok: false, error: 'bad number' });
+  }
+
+  try {
+    const r = await db.query(
+      `SELECT subscription FROM public.push_subscriptions WHERE number = $1`,
+      [number]
+    );
+    const sub = r.rows[0]?.subscription;
+
+    if (!sub) {
+      return res.json({ ok: false, error: 'no subscription saved for this number' });
+    }
+
+    const result = await webpush.sendNotification(
+      sub,
+      JSON.stringify({
+        type: 'incoming-call',
+        callerName: 'TEST',
+        callerNumber: '0000000000',
+      }),
+      { urgency: 'high', TTL: 30 }
+    );
+
+    return res.json({ ok: true, status: result.statusCode });
+  } catch (e) {
+    return res.json({ ok: false, status: e.statusCode, body: e.body || e.message });
+  }
+});
+
 /* ---------------- Socket events ---------------- */
 io.on('connection', (socket) => {
   console.log(`[socket] connected ${socket.id}`);
