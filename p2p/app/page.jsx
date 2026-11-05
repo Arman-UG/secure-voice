@@ -782,6 +782,7 @@ export default function HomePage() {
     registrationError,
     registerIdentity,
     requestNotificationPermission,
+    registerPushSubscription,
     logout,
     deleteAccount,
     callState,
@@ -814,6 +815,27 @@ export default function HomePage() {
   const [activeMainSection, setActiveMainSection] = useState('hub');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [copiedMyNumber, setCopiedMyNumber] = useState(false);
+    const [notifPerm, setNotifPerm] = useState('default');
+  const [notifBusy, setNotifBusy] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setNotifPerm(Notification.permission);
+    }
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    if (!myNumber || notifBusy) return;
+    setNotifBusy(true);
+    try {
+      const granted = await requestNotificationPermission();
+      setNotifPerm(Notification.permission);
+      if (granted) await registerPushSubscription(myNumber);
+    } finally {
+      setNotifBusy(false);
+    }
+  };
+
   const [pendingNotificationAction, setPendingNotificationAction] =
   useState(null);
 
@@ -1457,7 +1479,25 @@ useEffect(() => {
               </button>
             </div>
           </div>
-
+                          {notifPerm !== 'granted' && notifPerm !== 'unsupported' && (
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--sv-border)] bg-[var(--sv-surface-2)] px-4 py-3">
+              <p className="text-xs text-[var(--sv-text)]">
+                {notifPerm === 'denied'
+                  ? 'Notifications blocked hain. Chrome ki site settings mein Notifications Allow kar.'
+                  : 'App band hone par incoming call ke liye notifications on kar.'}
+              </p>
+              {notifPerm !== 'denied' && (
+                <button
+                  type="button"
+                  onClick={handleEnableNotifications}
+                  disabled={notifBusy}
+                  className="shrink-0 rounded-xl border border-[var(--sv-border)] bg-[var(--sv-surface)] px-3 py-2 text-xs font-semibold text-[var(--sv-text)] disabled:opacity-60"
+                >
+                  {notifBusy ? 'Enabling…' : 'Enable'}
+                </button>
+              )}
+            </div>
+          )}
           {activeMainSection === 'hub' && (
             <>
           {/* Alerts & Notices */}

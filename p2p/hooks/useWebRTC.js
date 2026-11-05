@@ -97,6 +97,7 @@ export default function useWebRTC() {
   const [registrationRequired, setRegistrationRequired] = useState(false);
   const [registrationError, setRegistrationError] = useState(null);
   const [notificationPermission, setNotificationPermission] = useState('default');
+  
 
   const [callState, setCallState] = useState(CALL_STATE.IDLE);
   const [incomingCall, setIncomingCall] = useState(null);

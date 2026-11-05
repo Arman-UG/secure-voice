@@ -191,7 +191,7 @@ app.get('/push/test/:number', async (req, res) => {
       }),
       { urgency: 'high', TTL: 30 }
     );
-
+7
     return res.json({ ok: true, status: result.statusCode });
   } catch (e) {
     return res.json({ ok: false, status: e.statusCode, body: e.body || e.message });
