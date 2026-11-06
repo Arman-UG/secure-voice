@@ -39,7 +39,7 @@ self.addEventListener('push', (event) => {
         body: `${callerName} (${callerNumber}) is calling you`,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        tag: 'secure-voice-incoming-call',
+        tag: 'SecureVoice-IncomingCall',
         renotify: true,
         requireInteraction: true,
         data: {

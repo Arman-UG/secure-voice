@@ -1007,6 +1007,7 @@ useEffect(() => {
 
   const [targetNumber, setTargetNumber] = useState('');
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateRegistration, setUpdateRegistration] = useState(null);
 
   useEffect(() => {
     if (
@@ -1026,6 +1027,7 @@ useEffect(() => {
         installingWorker?.state === 'installed' &&
         navigator.serviceWorker.controller
       ) {
+        setUpdateRegistration(registration);
         setUpdateAvailable(true);
       }
     };
@@ -1047,6 +1049,7 @@ useEffect(() => {
             registration?.waiting &&
             navigator.serviceWorker.controller
           ) {
+            setUpdateRegistration(registration);
             setUpdateAvailable(true);
           }
         };
@@ -1422,21 +1425,34 @@ useEffect(() => {
           </div>
 
           {/* Service Worker Update Toast */}
-          {updateAvailable && (
-            <div
-              data-testid="update-banner"
-              className="sv-pop-in flex items-center justify-between gap-3 rounded-2xl border border-[var(--sv-emerald-border)] bg-[var(--sv-emerald-bg)] px-4 py-3 text-sm font-medium text-[var(--sv-emerald-text)] shadow-sm"
-            >
-              <span>New version ready to install!</span>
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="shrink-0 rounded-xl bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm transition-transform duration-200 hover:scale-105 active:scale-95"
-              >
-                Update Now
-              </button>
-            </div>
-          )}
+          ```jsx
+<button
+  type="button"
+  onClick={() => {
+    const waitingWorker = updateRegistration?.waiting;
+
+    if (!waitingWorker) {
+      console.warn('[UPDATE] No waiting Service Worker found.');
+      return;
+    }
+
+    navigator.serviceWorker.addEventListener(
+      'controllerchange',
+      () => {
+        window.location.reload();
+      },
+      { once: true }
+    );
+
+    waitingWorker.postMessage({
+      type: 'SKIP_WAITING',
+    });
+  }}
+  className="shrink-0 rounded-xl bg-emerald-500 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm transition-transform duration-200 hover:scale-105 active:scale-95"
+>
+  Update Now
+</button>
+```
 
           {/* Compact Identity Bar (Always visible so `my-number` testid is always mounted) */}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--sv-border)] bg-[var(--sv-surface)] px-4 py-3 shadow-sm transition-all duration-300 hover:border-[var(--sv-muted)]/40">
