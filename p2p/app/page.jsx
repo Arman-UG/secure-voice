@@ -1425,7 +1425,7 @@ useEffect(() => {
           </div>
 
           {/* Service Worker Update Toast */}
-          ```jsx
+        
 <button
   type="button"
   onClick={() => {
@@ -1452,7 +1452,6 @@ useEffect(() => {
 >
   Update Now
 </button>
-```
 
           {/* Compact Identity Bar (Always visible so `my-number` testid is always mounted) */}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--sv-border)] bg-[var(--sv-surface)] px-4 py-3 shadow-sm transition-all duration-300 hover:border-[var(--sv-muted)]/40">
